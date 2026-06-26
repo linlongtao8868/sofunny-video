@@ -1,0 +1,7 @@
+interface:
+  display_name: "Sofunny Video"
+  short_description: "通过 Seedance Studio 服务提交 Seedance 视频任务并返回服务器下载链接"
+  default_prompt: "使用 $sofunny-video 提交 Seedance 视频生成任务，并返回服务器本地下载链接与 FTP 链接。"
+
+policy:
+  allow_implicit_invocation: true
