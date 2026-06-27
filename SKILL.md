@@ -1,102 +1,167 @@
 ---
 name: sofunny-video
-description: 通过 Seedance Studio 服务提交 Seedance 视频生成任务并返回服务器可访问的下载链接。适用于需要避免直接调用上游 NewAPI、需要轮询长任务、需要从历史记录中恢复超时任务、或需要同时返回服务器本地链接与 FTP 链接的场景。配置优先级为命令行参数 > 进程环境变量 > ~/.sofunny-video.env。
+description: 通过 llm-api-proxy 调用 doubao-seedance 视频生成接口，提交任务、轮询长任务、下载本地 mp4。支持文生视频、图生视频、视频生视频，参考图/视频/音频以 base64 data URL 随请求传递，可透传 generate_audio 让上游为视频生成音频。适用于需要复用 `.sofunny-video.env` 或当前 shell 环境变量的场景。
 ---
 
-# sofunny-video 视频生成技能
+# sofunny-video
 
-当视频生成必须统一经过 Seedance Studio 服务时，使用这个技能。
+## 何时使用
 
-## 使用流程
+在以下场景使用本 skill：
 
-1. 先确认服务地址。除非用户或环境明确指定，否则默认使用 `http://10.20.3.69:3001`。
-2. 在构造请求、判断任务状态、排查超时之前，先阅读 [references/api.md](references/api.md)。
-3. 默认使用跨平台脚本 `scripts/sofunny-video.js` 完成提交与轮询。
-4. 在 Windows PowerShell 下需要壳层包装时，使用 `scripts/sofunny-video.ps1`。
-5. 在 macOS 或 Linux 下需要壳层包装时，使用 `scripts/sofunny-video.sh`。
-6. 如果上游报模型不可用，先检查 NewAPI 主机是否真的挂载了可用的 Seedance 视频渠道。
-7. 返回结果时优先给服务器本地下载链接。先取 `/api/task/:taskId` 的 `local_result_url`，没有再回退到 `/api/history/:taskId`。
-8. 如果启用了 FTP 镜像，同时返回 FTP 链接，保证服务器本地副本与 FTP 副本一起交付。
-9. 除非调用方明确关闭，脚本默认还会把视频下载一份到调用方当前项目的 `sofunny-video-downloads/` 目录。
-10. 参数解析顺序固定为：命令行参数优先，其次进程环境变量，再次 `~/.sofunny-video.env`，最后只对缺失字段发起交互补问。
+- 用户要生成视频（文生视频、图生视频、视频生视频）
+- 用户要上传一张参考图、一段参考视频或一段参考音频，再结合文本生成新视频
+- 用户要让上游为视频生成音频（`--generate-audio`）或把参考音频作为背景音乐
+- 用户希望通过 `llm-api-proxy` 统一调用 `doubao-seedance` 系列模型
+- 用户希望优先复用：
+  - 进程环境变量
+  - `~/.sofunny-video.env`
+
+如果只是普通文本问答、代码生成或图片生成，不要使用本 skill（图片生成用 `sofunny-image`）。
 
 ## 配置来源
 
 脚本按以下顺序读取配置：
 
-1. 命令行参数
-2. 当前 shell 的进程环境变量
-3. `~/.sofunny-video.env`
+1. `~/.sofunny-video.env`
+2. 当前 shell 的环境变量
 
-如果没有检测到 `~/.sofunny-video.env`，脚本会在缺少 API Key 时提示你创建该文件并写入所需变量模板。
+命令行参数 `--base-url`、`--api-key`、`--model` 会覆盖以上配置。
+
+如果没有检测到 `~/.sofunny-video.env`，脚本会提示你创建该文件并写入所需变量模板。
 
 优先使用这些变量：
 
+- `SOFUNNY_BASE_URL`
 - `SOFUNNY_API_KEY`
-- `SOFUNNY_PROMPT`
-- `SOFUNNY_SERVICE_URL`
-- `SOFUNNY_API_URL`
 - `SOFUNNY_MODEL`
-- `SOFUNNY_DURATION`
-- `SOFUNNY_ASPECT_RATIO`
-- `SOFUNNY_RESOLUTION`
-- `SOFUNNY_IMAGE_URL`
-- `SOFUNNY_VIDEO_URL`
-- `SOFUNNY_DOWNLOAD_DIR`
-- `SOFUNNY_TIMEOUT_SECONDS`
-- `SOFUNNY_POLL_INTERVAL_MS`
-- `SOFUNNY_SKIP_PROJECT_DOWNLOAD`
 
 默认期望值：
 
-- `SOFUNNY_SERVICE_URL=http://10.20.3.69:3001`
+- `SOFUNNY_BASE_URL=https://llm-api-proxy.hnfunny.com`
+- `SOFUNNY_MODEL=doubao-seedance-2-0-260128`
 
-## 必填项
+## 安装与执行入口
 
-- `apiKey`（`SOFUNNY_API_KEY`）
-- `prompt`（`SOFUNNY_PROMPT`）
+- 推荐将仓库目录软链接到：
+  - `${CLAUDE_PLUGIN_ROOT}/skills/sofunny-video`
+- 可执行脚本入口：
+  - `${CLAUDE_PLUGIN_ROOT}/skills/sofunny-video/scripts/sofunny-video.js`
 
-## 可选项
+## 快速用法
 
-- `serviceUrl`
-- `apiUrl`
-- `model`
-- `duration`
-- `aspectRatio`
-- `resolution`
-- `imageUrl`
-- `videoUrl`
-- `downloadDir`
-- `skipProjectDownload`
-- `timeoutSeconds`
-- `pollIntervalMs`
+文生视频：
 
-当脚本运行在可交互终端中时，只会询问仍然缺失的字段。
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/skills/sofunny-video/scripts/sofunny-video.js \
+  --prompt "5秒电影感教室纯爱短片，16:9。"
+```
 
-补问顺序：
+图生视频（参考图为本地文件，自动编码为 base64 data URL）：
 
-1. `apiKey`
-2. `prompt`
-3. `apiUrl`
-4. `model`
-5. `duration`
-6. `aspectRatio`
-7. `resolution`
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/skills/sofunny-video/scripts/sofunny-video.js \
+  --prompt "保持主体不变，镜头缓缓推近。" \
+  --input /absolute/path/to/ref-1.png
+```
 
-## 恢复规则
+多参考图 + 参考视频：
 
-1. 出错或超时后，不要自动切换模型重试。
-2. 如果上游已经扣费但客户端超时，先检查 `/api/task-debug/:taskId` 和 `/api/history/:taskId`，再判断任务是否失败。
-3. 如果轮询已经成功但还没有 `local_result_url`，先短暂等待，再查询 `/api/history/:taskId`，因为服务端是异步落盘。
-4. 如果同时拿到了服务器链接和上游链接，两个都可以返回，但服务器链接必须作为主交付地址。
-5. 如果启用了 FTP 镜像，把 FTP 链接作为次级交付方式一起返回。
-6. 如果上游返回 `model_not_found`、`No available channel` 或同类错误，优先按 NewAPI 渠道或模型配置问题排查。
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/skills/sofunny-video/scripts/sofunny-video.js \
+  --prompt "按参考视频的运动节奏，把场景换成参考图的氛围。" \
+  --input /absolute/path/to/ref-a.png \
+  --input /absolute/path/to/ref-b.jpg \
+  --video-input /absolute/path/to/motion-ref.mp4
+```
 
-## 说明
+参考音频 + 让上游生成音频（参考音频作为背景音乐，prompt 用「音频1」按位置引用）：
 
-1. 除非用户明确要求直连上游，否则始终把这个技能指向 Seedance Studio 服务，而不是直接调用提供方接口。
-2. 后续轮询优先使用 `task_id`，不要依赖泛化的 `id`。
-3. 端点字段、响应结构和排障细节统一以 [references/api.md](references/api.md) 为准。
-4. 默认行为会在调用方当前项目下的 `sofunny-video-downloads/` 里额外保留一份本地文件。
-5. 对 opencode 或其他代理客户端来说，上游 API Key 和主机本身必须已经具备可用的 Seedance 视频渠道，这个技能不会绕过上游权限限制。
-6. 如果服务调用失败，不要自动回退成第二次直接 `POST /v1/video/generations` 测试，否则会造成重复计费。应优先使用 `/api/task-debug/:taskId`、`/api/history/:taskId` 或一次人工验证来排障。
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/skills/sofunny-video/scripts/sofunny-video.js \
+  --prompt "全程使用音频1作为背景音乐，第一人称视角果茶广告。" \
+  --input /absolute/path/to/pic1.jpg \
+  --input /absolute/path/to/pic2.jpg \
+  --video-input /absolute/path/to/motion-ref.mp4 \
+  --audio-input /absolute/path/to/bgm.mp3 \
+  --generate-audio \
+  --duration 11 \
+  --ratio 16:9
+```
+
+直接传入已经是公网 URL 的参考媒体（不再做 base64 编码）：
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/skills/sofunny-video/scripts/sofunny-video.js \
+  --prompt "让这张图里的人物转头微笑。" \
+  --image-url https://example.com/ref.png
+```
+
+指定时长、画幅、分辨率、输出路径：
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/skills/sofunny-video/scripts/sofunny-video.js \
+  --prompt "10秒赛博朋克城市夜景航拍。" \
+  --duration 10 \
+  --ratio 16:9 \
+  --resolution 1080p \
+  --output /tmp/city.mp4
+```
+
+## 参数说明
+
+- `--prompt`：必填，视频生成指令
+- `--input`：可重复，参考图本地路径；脚本会编码为 `data:image/...;base64,...` 放入 `metadata.content[].image_url`
+- `--video-input`：可重复，参考视频本地路径；编码为 `data:video/...;base64,...` 放入 `metadata.content[].video_url`
+- `--audio-input`：可重复，参考音频本地路径；编码为 `data:audio/...;base64,...` 放入 `metadata.content[].audio_url`，并带 `role:"reference_audio"`
+- `--image-url`：可重复，已是公网 URL 的参考图，原样透传
+- `--video-url`：可重复，已是公网 URL 的参考视频，原样透传
+- `--audio-url`：可重复，已是公网 URL 的参考音频，原样透传
+- `--generate-audio`：透传 `metadata.generate_audio=true`，让上游为视频生成音频；用 `--no-generate-audio` 显式置 false
+- `--watermark`：透传 `metadata.watermark=true`；默认不传，由上游决定
+- `--duration`：可选，视频时长（秒），默认 `5`
+- `--ratio`：可选，画幅比例，默认 `16:9`
+- `--resolution`：可选，分辨率，默认 `1080p`；上游价表维度之一（480p/720p/1080p/4k）
+- `--seed`：可选，随机种子
+- `--output`：可选，输出视频文件路径；未指定时保存到当前工作目录，文件名带时间戳
+- `--model`：可选，默认 `doubao-seedance-2-0-260128`
+- `--base-url`：可选，覆盖服务根地址
+- `--api-key`：可选，覆盖服务令牌
+- `--timeout-seconds`：可选，轮询超时，默认 `600`
+- `--poll-interval-ms`：可选，轮询间隔，默认 `3000`
+- `--debug`：可选，输出调试日志到 stderr
+
+## 工作流
+
+1. 收集用户的 prompt、参考图/视频/音频、时长、画幅、分辨率、输出路径。
+   - **图生/视频生/音频参考判断**：当用户提供了图片/视频/音频路径或 URL，必须作为 `--input` / `--video-input` / `--audio-input` / `--image-url` / `--video-url` / `--audio-url` 传入。没有这些参数的调用只会走纯文生视频，参考媒体会被完全忽略。
+   - 如果用户提到的参考媒体是对话中之前生成的，使用之前保存的输出路径作为 `--input` / `--video-input`。
+   - 参考媒体若已是公网 URL，优先用 `--image-url` / `--video-url` / `--audio-url` 透传，避免 base64 编码带来的体积膨胀。
+   - 参考项顺序固定为「图片 → 视频 → 音频」，与官方 content 数组顺序一致；prompt 用「图片1/视频1/音频1」按此顺序引用。
+2. 运行 `scripts/sofunny-video.js`。
+3. 脚本调用 `POST {BASE_URL}/v1/video/generations` 提交任务，从响应中取 `task_id`。
+4. 脚本按 `--poll-interval-ms` 轮询 `GET {BASE_URL}/v1/video/generations/{task_id}`，直到 `status=completed` 或 `failed`。
+5. 成功后通过 `GET {BASE_URL}/v1/videos/{task_id}/content` 下载视频到 `--output` 指定路径（或当前工作目录），并把保存路径返回给用户。
+
+## 错误处理
+
+- **禁止自动切换模型**：如果脚本调用失败，不要自动更换模型重试。用户配置（env 或 `--model`）指定的模型就是要用的模型。
+- 失败时应按以下顺序提示用户：
+  1. 展示完整错误信息
+  2. 建议用户检查配置（API Key、模型名称、上游是否挂载可用渠道）
+  3. 询问用户是否要重试（相同模型、相同参数）
+  4. 询问用户是否要切换到其他模型，由用户决定
+- 不要在用户未确认的情况下更换模型、更换参数或跳过错误。
+- **禁止重复提交**：任务提交后若客户端超时，先用 `task_id` 查询 `GET /v1/video/generations/{task_id}` 判断真实状态，不要重新提交第二个生成任务，否则会造成重复计费。
+
+## 注意事项
+
+- 本 skill 直连 `llm-api-proxy`，不再经过任何中间 Seedance Studio 服务。`BASE_URL` 应为代理根地址，脚本会自动拼出 `/v1/video/generations/...`。
+- 参考图/视频/音频以 base64 `data:` URL 随请求体传递。这种方式无需额外上传凭证，但会增大请求体体积；超大文件建议先自行上传到可公网访问的存储，再用 `--image-url` / `--video-url` / `--audio-url` 传入。
+- 所有参考媒体统一放入 `metadata.content` 数组（`image_url` / `video_url` / `audio_url` 三类 item），不使用顶层 `image` / `images` 字段。这是为了避免 doubao adaptor 的 `UnmarshalMetadata` 用 `metadata.content` 覆盖掉顶层图片项导致参考图丢失。
+- `generate_audio` / `watermark` 通过 `metadata` 透传：doubao adaptor 的 `requestPayload` 经 `UnmarshalMetadata` 反序列化这两个字段后再 marshal 给上游。后端早已支持，本 skill 仅负责把参数发出去。
+- 时长通过 `seconds`（字符串）字段传递：doubao adaptor 实际读取 `TaskSubmitReq.Seconds`，脚本同时发送 `seconds` 与 `duration`，以 `seconds` 为准。
+- 视频下载默认走代理的 `/v1/videos/{task_id}/content` 端点，它已处理上游鉴权与 `data:` URL 解码；若需要直链，可从返回 JSON 的 `video_url` 字段取上游地址。
+- `~/.sofunny-video.env` 中只应使用 `SOFUNNY_*` 变量，避免旧配置混入导致行为不一致。
+- 上游 `doubao-seedance-2.0` 计费随「分辨率 × 是否含视频输入」变化：传入 `--video-input` / `--video-url` 会触发「含视频输入」档位，价格不同。
+- 若上游返回 `model_not_found`、`No available channel` 或同类错误，优先按代理渠道或模型配置问题排查，而不是怀疑本 skill。

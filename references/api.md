@@ -1,224 +1,270 @@
-# Seedance Studio 接口参考
+# llm-api-proxy 视频生成接口参考
+
+本 skill 直连 `llm-api-proxy`（一个 New-API 衍生项目），调用 `doubao-seedance` 系列视频生成模型。下述接口均以代理根地址 `BASE_URL`（默认 `https://llm-api-proxy.hnfunny.com`）为前缀。
 
 ## 接口总览
 
-### `POST /api/generate`
+### `POST /v1/video/generations`
 
-通过本地 Seedance Studio 服务提交一个视频生成任务。
+提交一个视频生成任务。请求体经代理转换为火山引擎 doubao-seedance 上游格式（`/api/v3/contents/generations/tasks`）。
 
-请求体示例：
+请求头：
+
+```
+Authorization: Bearer <SOFUNNY_API_KEY>
+Content-Type: application/json
+```
+
+请求体示例（文生视频）：
 
 ```json
 {
-  "apiKey": "sk-xxx",
-  "prompt": "15秒电影感教室纯爱短片",
-  "duration": 15,
-  "aspectRatio": "16:9",
-  "resolution": "1080p",
-  "apiUrl": "https://your-newapi-host",
-  "model": "ep-20260618182255-cxtc2",
-  "imageUrl": "data:image/png;base64,...",
-  "videoUrl": "data:video/mp4;base64,..."
+  "model": "doubao-seedance-2-0-260128",
+  "prompt": "5秒电影感教室纯爱短片",
+  "seconds": "5",
+  "duration": 5,
+  "metadata": {
+    "ratio": "16:9",
+    "resolution": "1080p"
+  }
 }
 ```
 
-重点响应字段：
+请求体示例（图生视频，参考图以 base64 data URL 传递）：
 
-- `task_id`：优先使用的任务编号
-- `id`：仅在没有 `task_id` 时兜底使用
-- `model`：最终实际使用的上游模型或 `ep-id`
+```json
+{
+  "model": "doubao-seedance-2-0-260128",
+  "prompt": "保持主体不变，镜头缓缓推近。",
+  "seconds": "5",
+  "duration": 5,
+  "metadata": {
+    "ratio": "16:9",
+    "resolution": "1080p",
+    "content": [
+      { "type": "image_url", "image_url": { "url": "data:image/png;base64,...." } }
+    ]
+  }
+}
+```
 
-### `GET /api/task/:taskId`
+请求体示例（视频生视频，参考视频以 base64 data URL 传递）：
 
-通过本地服务轮询任务状态。
+```json
+{
+  "model": "doubao-seedance-2-0-260128",
+  "prompt": "按参考视频的运动节奏重绘场景。",
+  "seconds": "5",
+  "duration": 5,
+  "metadata": {
+    "ratio": "16:9",
+    "resolution": "1080p",
+    "content": [
+      { "type": "video_url", "video_url": { "url": "data:video/mp4;base64,...." } }
+    ]
+  }
+}
+```
 
-查询参数：
+请求体示例（参考图 + 参考视频 + 参考音频 + 让上游生成音频，对应官方 Ark `reference_image` / `reference_video` / `reference_audio` 用法）：
 
-- `apiKey`：必填
-- `apiUrl`：可选，用于覆盖默认上游地址
+```json
+{
+  "model": "doubao-seedance-2-0-260128",
+  "prompt": "全程使用音频1作为背景音乐，第一人称视角果茶广告。",
+  "seconds": "11",
+  "duration": 11,
+  "metadata": {
+    "ratio": "16:9",
+    "resolution": "1080p",
+    "generate_audio": true,
+    "content": [
+      { "type": "image_url", "image_url": { "url": "data:image/jpeg;base64,...." } },
+      { "type": "image_url", "image_url": { "url": "data:image/jpeg;base64,...." } },
+      { "type": "video_url", "video_url": { "url": "data:video/mp4;base64,...." } },
+      { "type": "audio_url", "audio_url": { "url": "data:audio/mpeg;base64,...." }, "role": "reference_audio" }
+    ]
+  }
+}
+```
+
+提交成功响应（代理返回 OpenAI Video 对象）：
+
+```json
+{
+  "id": "task-xxxx",
+  "task_id": "task-xxxx",
+  "object": "video",
+  "model": "doubao-seedance-2-0-260128",
+  "created_at": 1782000000
+}
+```
+
+重点字段：
+
+- `task_id`：任务编号，后续轮询与下载都依赖它；缺失时回退取 `id`
+
+### `GET /v1/video/generations/:task_id`
+
+轮询任务状态。
+
+请求头：
+
+```
+Authorization: Bearer <SOFUNNY_API_KEY>
+```
+
+成功响应：
+
+```json
+{
+  "id": "task-xxxx",
+  "task_id": "task-xxxx",
+  "object": "video",
+  "model": "doubao-seedance-2-0-260128",
+  "status": "completed",
+  "progress": 100,
+  "created_at": 1782000000,
+  "completed_at": 1782000600,
+  "metadata": {
+    "url": "https://ark-project.tos-cn-beijing.volces.com/.../output.mp4"
+  }
+}
+```
+
+状态取值（`dto/openai_video.go` 中的 `VideoStatus` 常量）。注意 doubao 任务完成时代理回显的是 `SUCCESS`（小写 `success`），并非 OpenAI 风格的 `completed`；脚本把 `success` / `succeeded` / `completed` 统一视为完成。轮询响应实际包在 `{code, message, data:{...}}` 里，状态字段位于 `data.status`，脚本同时兼容顶层 `status`。
+
+| status        | 含义         | 脚本处理       |
+| ------------- | ------------ | -------------- |
+| `queued` / `not_start` / `pending` | 排队中 | 继续轮询 |
+| `in_progress` / `processing` / `running` | 生成中 | 继续轮询 |
+| `success` / `succeeded` / `completed` | 生成完成 | 下载视频 |
+| `failed`      | 生成失败     | 抛出错误       |
+| `unknown`     | 未知/未识别  | 视为进行中继续 |
 
 成功时需要关注的字段：
 
-- `data.status` 或 `status`
-- `data.progress` 或 `progress`
-- `data.result_url` 或同类上游结果地址
-- `data.local_result_url`：优先交付的服务器本地下载链接
-- `data.ftp_result_url`：如果启用了 FTP 镜像，对应 FTP 链接
-- `data.ftp_result_path`：FTP 服务器上的实际路径
+- `metadata.url`：上游视频直链（优先取这里）
+- `url`：兼容兜底
+- `progress`：进度百分比
+- `error`：失败时的错误信息
 
-当前已识别的成功状态：
+### `GET /v1/videos/:task_id/content`
 
-- `COMPLETED`
-- `SUCCESS`
-- `SUCCEEDED`
-- `DONE`
-- `completed`
+通过代理下载视频内容。代理会根据任务所属渠道回源取视频（OpenAI/Sora 走 `{baseURL}/v1/videos/{id}/content`，Gemini/Vertex 走对应回源逻辑，doubao 走任务存储的 `result_url`），并处理 `data:` URL 解码与 SSRF 校验，最后以 `200` 流式返回视频字节，带 `Cache-Control: public, max-age=86400`。
 
-需要继续轮询的状态：
+请求头：
 
-- `PENDING`
-- `IN_PROGRESS`
+```
+Authorization: Bearer <SOFUNNY_API_KEY>
+```
 
-### `GET /api/task-debug/:taskId`
+约束：
 
-当普通轮询结果不明确时，用这个接口查看原始返回。
+- 任务必须已处于 `success`（`completed`）状态，否则返回 `400 Task is not completed yet`
 
-返回字段：
+## 请求体字段细节
 
-- `statusCode`
-- `contentType`
-- `body`
+### `model`
 
-这个接口最适合排查：
+固定为 `doubao-seedance-2-0-260128`（可通过 `--model` / `SOFUNNY_MODEL` 覆盖）。
 
-- `ep-id` 不匹配
-- 上游返回 HTML 报错页
-- 非标准 JSON 结构
+### `prompt`
 
-### `GET /api/history`
+必填，视频生成指令。代理会对空 prompt 直接返回 `400 prompt is required`。
 
-读取 `history/records.json` 中最近保存的历史记录。
+### `seconds` 与 `duration`
 
-每条记录可能包含：
+doubao adaptor 在构造上游请求体时读取的是 `TaskSubmitReq.Seconds`（字符串字段），而非 `Duration`（整数）。因此本脚本同时发送两者，并以 `seconds` 为实际生效字段：
 
-- `id`
-- `createdAt`
-- `prompt`
-- `duration`
-- `aspectRatio`
-- `resolution`
-- `model`
-- `taskId`
-- `remoteUrl`
-- `localUrl`
-- `localPath`
-- `ftpUrl`
-- `ftpPath`
+```json
+{ "seconds": "5", "duration": 5 }
+```
 
-### `GET /api/history/:taskId`
+### `metadata`
 
-读取某个任务对应的一条已落盘历史记录。
+火山引擎 doubao-seedance 支持的扩展字段，经代理 `UnmarshalMetadata` 反序列化进上游请求体。本脚本用到的子字段：
 
-适用场景：
+| 字段         | 说明                                         |
+| ------------ | -------------------------------------------- |
+| `ratio`      | 画幅比例，如 `16:9`、`9:16`、`1:1`           |
+| `resolution` | 分辨率：`480p` / `720p` / `1080p` / `4k`     |
+| `seed`       | 随机种子（整数）                             |
+| `generate_audio` | 布尔，让上游为视频生成音频；对应官方 `generate_audio` |
+| `watermark`  | 布尔，是否带水印；默认不传由上游决定          |
+| `content`    | 参考媒体数组，见下                           |
 
-- `/api/task/:taskId` 已成功，但暂时没有 `local_result_url`
-- 客户端超时，但服务端可能已经保存好了视频
-- 需要稳定的服务器下载地址，而不是重新拉全量历史
+### `metadata.content[]`
 
-### `GET /api/validate`
+参考媒体数组。每项为以下之一（均需带 `role`，上游 doubao-seedance-2.0 校验 `role must be specified for image contents`，缺 `role` 会被拒）：
 
-快速检查凭证和上游联通性。
+- 图片：`{ "type": "image_url", "image_url": { "url": "<data URL 或公网 URL>" }, "role": "reference_image" }`
+- 视频：`{ "type": "video_url", "video_url": { "url": "<data URL 或公网 URL>" }, "role": "reference_video" }`
+- 音频：`{ "type": "audio_url", "audio_url": { "url": "<data URL 或公网 URL>" }, "role": "reference_audio" }`
 
-查询参数：
+`role` 取值与官方 Ark curl 一致。参考项顺序建议固定为「图片 → 视频 → 音频」，prompt 用「图片1/视频1/音频1」按位置引用。
 
-- `apiKey`：必填
-- `apiUrl`：可选
+**参考媒体的 URL 形式约束**：上游 doubao-seedance-2.0 对不同媒体类型的 URL 形式要求不同——
 
-## 结果返回优先级
+- 图片（`reference_image`）：接受 base64 `data:` URL，也接受公网 URL。
+- 视频（`reference_video`）：**必须是公网 web URL**，传 base64 `data:` URL 会被拒（`reference_video must be provided as a web url`）。
+- 音频（`reference_audio`）：同样要求公网 web URL，不要用 base64。
 
-返回结果时，优先顺序如下：
+因此本地视频/音频文件无法直接 base64 透传，必须先上传到可公网访问的存储（或直接用官方已公开的 `ark-project.tos-cn-beijing.volces.com` 资源），再用 `--video-url` / `--audio-url` 传入；本地图片仍可用 `--input` 走 base64。
 
-1. `/api/task/:taskId` 中的 `local_result_url`
-2. `/api/history/:taskId` 中的 `localUrl`
-3. `ftp_result_url` 或 `ftpUrl`
-4. 上游 `result_url` 或其他远程视频地址
+**为什么所有参考媒体都放进 `metadata.content` 而不用顶层 `image`/`images`**：doubao adaptor 的 `parseRequestPayload` 先把顶层 `Images` 展开成 `r.Content` 的 `image_url` 项，再调用 `UnmarshalMetadata(req.Metadata, &r)`。如果 `metadata` 里带了 `content` 字段，标准 JSON 反序列化会用它**整体覆盖** `r.Content`，导致顶层图片项被抹掉。为避免这个坑，本脚本统一把全部参考媒体（图 + 视频）放进 `metadata.content`，不使用顶层 `image`/`images`。
 
-## 上游渠道检查
+### 参考媒体 URL 形式
 
-在怀疑本地服务或技能逻辑之前，先确认上游 `NewAPI` 主机是否真的具备目标视频模型的可用渠道。
+上游 doubao-seedance 异步任务需要服务端多次读取参考媒体，因此要求可直接访问的 URL。本脚本默认把本地文件编码为 `data:<mime>;base64,<...>` 放进请求体：
 
-推荐检查顺序：
+- 图片：`data:image/png;base64,...` / `data:image/jpeg;base64,...` / `data:image/webp;base64,...`
+- 视频：`data:video/mp4;base64,...` / `data:video/webm;base64,...` / `data:video/quicktime;base64,...`
+- 音频：`data:audio/mpeg;base64,...`（.mp3）/ `data:audio/wav;base64,...` / `data:audio/mp4;base64,...`（.m4a）/ `data:audio/aac;base64,...` / `data:audio/ogg;base64,...` / `data:audio/flac;base64,...`
 
-1. `GET /v1/models`
-2. 搜索结果里是否存在目标 `Seedance` 模型或 `ep-id`
-3. 用同一把 Key 和同一模型做一次人工 `POST /v1/video/generations` 验证
+如果参考媒体已经是公网 URL（例如已上传到对象存储），用 `--image-url` / `--video-url` / `--audio-url` 原样透传即可，避免 base64 膨胀请求体。
 
-如果上游出现以下错误：
+> 说明：用户最初提到的 `https://ark-project.tos-cn-beijing.volces.com/doc_image/` 与 `.../doc_video/` 经实测为**公开读、非公开写**的火山引擎 TOS 桶（匿名 PUT 返回 `403 AccessDenied`），无法在脚本端无凭证上传。因此本 skill 改用 base64 data URL 方案；若已自行上传到该桶或其他公网存储，直接用 `--image-url` / `--video-url` 传入即可。
 
-- `model_not_found`
-- `No available channel`
-- `无可用渠道（distributor）`
+## 计费说明
 
-通常说明根因在上游模型或渠道配置，而不是本地历史保存逻辑。
+`doubao-seedance-2.0` 的 token 单价随两个维度变化（代理 `relay/channel/task/doubao/adaptor.go` 中的 `doubaoSeedance2CNYPrice`）：
 
-## 持久化行为
+- **输出分辨率**：480p / 720p / 1080p / 4k
+- **是否含视频输入**：`metadata.content` 中存在 `type:"video_url"` 项即视为含视频输入，走「视频生视频」档位
 
-视频生成成功后，服务端会把结果下载到：
+脚本不会干预计费，仅在 `--video-input` / `--video-url` 触发时被动进入含视频输入档位。如需控制成本，注意分辨率选择与是否引入参考视频。
 
-- `history/videos/`
+## 超时与恢复
 
-如果启用了 FTP 镜像，同一个文件还会复制到：
+如果客户端看起来超时，但任务实际已提交：
 
-- `FTP_MIRROR_DIR`，例如 `/data/ftp/seedance-studio`
+1. 保留原始 `task_id`（提交响应里取）
+2. 查询 `GET /v1/video/generations/{task_id}` 判断真实状态
+3. 若 `completed`，直接走 `GET /v1/videos/{task_id}/content` 下载
+4. 若 `failed`，从 `error` 字段取原因
 
-任务元数据会写入：
-
-- `history/records.json`
-
-需要注意：
-
-- 服务端是异步保存历史记录的
-- 因此任务刚成功时，`local_result_url` 可能会比上游成功状态稍晚出现
-- 这种情况下，应先等待片刻，再查 `/api/history/:taskId`
+在完成上述检查前，不要重新提交第二个生成任务，否则会造成重复计费。
 
 ## 脚本入口
 
-优先使用的跨平台脚本：
+跨平台脚本：
 
-- `scripts/generate-video.js`
+- `scripts/sofunny-video.js`
 
-包装脚本：
-
-- `scripts/generate-video.ps1`
-- `scripts/generate-video.sh`
-
-默认情况下，脚本还会在调用方当前项目下额外下载一份文件到：
-
-- `seedance-downloads/`
+（不再提供 `.sh` / `.ps1` 壳层脚本，统一用 `node` 调用 `.js`）
 
 ## 参数解析规则
 
-技能脚本按以下顺序解析参数：
+脚本按以下顺序解析配置：
 
 1. 命令行参数
-2. 环境变量
-3. 对仍然缺失的字段发起交互式补问
-4. 对非敏感可选项使用内置默认值，例如 `duration`、`aspectRatio`、`resolution`
+2. 进程环境变量
+3. `~/.sofunny-video.env`
+4. 内置默认值（`duration=5`、`ratio=16:9`、`resolution=1080p` 等）
 
-只有在真实 TTY 终端中，交互式补问才会触发。
+支持的环境变量：
 
-当前支持的环境变量包括：
-
-- `SEEDANCE_STUDIO_API_KEY`
-- `SEEDANCE_STUDIO_PROMPT`
-- `SEEDANCE_STUDIO_SERVICE_URL`
-- `SEEDANCE_STUDIO_API_URL`
-- `SEEDANCE_STUDIO_MODEL`
-- `SEEDANCE_STUDIO_DURATION`
-- `SEEDANCE_STUDIO_ASPECT_RATIO`
-- `SEEDANCE_STUDIO_RESOLUTION`
-- `SEEDANCE_STUDIO_IMAGE_URL`
-- `SEEDANCE_STUDIO_VIDEO_URL`
-- `SEEDANCE_STUDIO_DOWNLOAD_DIR`
-- `SEEDANCE_STUDIO_TIMEOUT_SECONDS`
-- `SEEDANCE_STUDIO_POLL_INTERVAL_MS`
-- `SEEDANCE_STUDIO_SKIP_PROJECT_DOWNLOAD`
-
-## 超时处理
-
-如果客户端看起来超时，但上游实际上已经消费：
-
-1. 保留原始 `taskId`
-2. 查询 `/api/task/:taskId`
-3. 如果状态不明确，再查 `/api/task-debug/:taskId`
-4. 最后再查 `/api/history/:taskId`
-
-在完成这些检查前，不要重新提交第二个生成任务。
-
-## Opencode 使用约束
-
-当这个技能被 `opencode` 或其他代理式终端调用时：
-
-1. 优先使用 `http://10.20.3.69:3001` 这个 Seedance Studio 服务地址，而不是 `localhost`
-2. 如果服务端在还没拿到 `taskId` 之前就返回错误，应直接暴露错误，不要继续自动重试
-3. 不要自动退回去直接调用上游 `POST /v1/video/generations`，否则会产生重复计费
+- `SOFUNNY_BASE_URL`
+- `SOFUNNY_API_KEY`
+- `SOFUNNY_MODEL`
