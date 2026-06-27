@@ -60,8 +60,8 @@ node ${CLAUDE_PLUGIN_ROOT}/skills/sofunny-video/scripts/sofunny-video.js \
 ## 参数决策
 
 - 必填：`--prompt`
-- 参考媒体：本地文件用 `--input` / `--video-input` / `--audio-input`（base64 透传）；已是公网 URL 用 `--image-url` / `--video-url` / `--audio-url`（原样透传，推荐，避免请求体膨胀）
-- 音频：`--generate-audio` 让上游为视频生成音频；参考音频作背景音乐时同时传 `--audio-input`，prompt 用「音频1」按位置引用
+- 参考媒体：本地**图片**用 `--input`（base64 透传，上游接受）；参考**视频/音频必须用公网 web URL**，上游不接受 base64（传了会返回 `reference_video must be provided as a web url`）。本地视频/音频文件需先自行上传到可公网访问的存储，再用 `--video-url` / `--audio-url` 传入；`--video-input` / `--audio-input` 已禁用本地文件，传了会直接报错提示。
+- 音频：`--generate-audio` 让上游为视频生成音频；参考音频作背景音乐时同时传 `--audio-url`（公网 URL），prompt 用「音频1」按位置引用
 - 画幅/时长/分辨率：`--ratio`、`--duration`、`--resolution`；计费随分辨率与是否含视频输入变化
 - 输出：`--output` 指定路径，未指定则写入当前工作目录（文件名带时间戳）
 - 完整参数表与默认值见 [references/api.md](references/api.md#参数速查)
@@ -69,9 +69,9 @@ node ${CLAUDE_PLUGIN_ROOT}/skills/sofunny-video/scripts/sofunny-video.js \
 ## 工作流
 
 1. 收集用户的 prompt、参考图/视频/音频、时长、画幅、分辨率、输出路径。
-   - **图生/视频生/音频参考判断**：当用户提供了图片/视频/音频路径或 URL，必须作为 `--input` / `--video-input` / `--audio-input` / `--image-url` / `--video-url` / `--audio-url` 传入。没有这些参数的调用只会走纯文生视频，参考媒体会被完全忽略。
-   - 如果用户提到的参考媒体是对话中之前生成的，使用之前保存的输出路径作为 `--input` / `--video-input`。
-   - 参考媒体若已是公网 URL，优先用 `--*--url` 透传，避免 base64 编码带来的体积膨胀。
+   - **图生/视频生/音频参考判断**：当用户提供了图片/视频/音频，必须作为 `--input` / `--image-url` / `--video-url` / `--audio-url` 传入。没有这些参数的调用只会走纯文生视频，参考媒体会被完全忽略。
+   - 如果用户提到的参考媒体是对话中之前生成的，使用之前保存的输出路径作为 `--input`（图片）。视频/音频输出若需复用，因其必须为公网 URL，需先确认已落到可公网访问的存储。
+   - 参考视频/音频必须是公网 web URL，上游不接受 base64 data URL；本地视频/音频文件需先上传到公网存储再用 `--video-url` / `--audio-url` 传入。
    - 参考项顺序固定为「图片 → 视频 → 音频」，与官方 content 数组顺序一致；prompt 用「图片1/视频1/音频1」按此顺序引用。
 2. 运行 `scripts/sofunny-video.js`。
 3. 脚本调用 `POST {BASE_URL}/v1/video/generations` 提交任务，从响应中取 `task_id`。
@@ -92,11 +92,11 @@ node ${CLAUDE_PLUGIN_ROOT}/skills/sofunny-video/scripts/sofunny-video.js \
 ## 注意事项
 
 - 本 skill 直连 `Sofunny AIKey`，不再经过任何中间 Seedance Studio 服务。`BASE_URL` 应为代理根地址，脚本会自动拼出 `/v1/video/generations/...`。
-- 参考图/视频/音频以 base64 `data:` URL 随请求体传递。这种方式无需额外上传凭证，但会增大请求体体积；超大文件建议先自行上传到可公网访问的存储，再用 `--image-url` / `--video-url` / `--audio-url` 传入。
+- 参考图以 base64 `data:` URL 随请求体传递（上游接受 `reference_image` 的 base64）；参考视频/音频**不接受 base64**，上游要求公网 web URL，传 base64 会被拒（`reference_video must be provided as a web url`）。因此本地视频/音频文件无法直接透传，必须先上传到可公网访问的存储，再用 `--video-url` / `--audio-url` 传入；`--video-input` / `--audio-input` 已禁用本地文件，传了会直接报错提示。
 - 所有参考媒体统一放入 `metadata.content` 数组（`image_url` / `video_url` / `audio_url` 三类 item），不使用顶层 `image` / `images` 字段。这是为了避免 doubao adaptor 的 `UnmarshalMetadata` 用 `metadata.content` 覆盖掉顶层图片项导致参考图丢失。
 - `generate_audio` / `watermark` 通过 `metadata` 透传：doubao adaptor 的 `requestPayload` 经 `UnmarshalMetadata` 反序列化这两个字段后再 marshal 给上游。后端早已支持，本 skill 仅负责把参数发出去。
 - 时长通过 `seconds`（字符串）字段传递：doubao adaptor 实际读取 `TaskSubmitReq.Seconds`，脚本同时发送 `seconds` 与 `duration`，以 `seconds` 为准。
 - 视频下载默认走代理的 `/v1/videos/{task_id}/content` 端点，它已处理上游鉴权与 `data:` URL 解码；若需要直链，可从返回 JSON 的 `video_url` 字段取上游地址。
 - `~/.sofunny-video.env` 中只应使用 `SOFUNNY_*` 变量，避免旧配置混入导致行为不一致。
-- 上游 `doubao-seedance-2.0` 计费随「分辨率 × 是否含视频输入」变化：传入 `--video-input` / `--video-url` 会触发「含视频输入」档位，价格不同。
+- 上游 `doubao-seedance-2.0` 计费随「分辨率 × 是否含视频输入」变化：传入 `--video-url` 会触发「含视频输入」档位，价格不同。
 - 若上游返回 `model_not_found`、`No available channel` 或同类错误，优先按代理渠道或模型配置问题排查，而不是怀疑本 skill。

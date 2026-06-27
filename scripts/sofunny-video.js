@@ -38,8 +38,8 @@ function printHelp() {
 参数：
   --prompt           必填，视频生成指令
   --input            可重复，参考图本地路径（编码为 base64 data URL 传入 image_url）
-  --video-input      可重复，参考视频本地路径（编码为 base64 data URL 传入 video_url）
-  --audio-input      可重复，参考音频本地路径（编码为 base64 data URL 传入 audio_url）
+  --video-input      已禁用：上游要求参考视频为公网 web URL，不接受 base64。请改用 --video-url
+  --audio-input      已禁用：上游要求参考音频为公网 web URL，不接受 base64。请改用 --audio-url
   --image-url        可重复，已是公网 URL 的参考图，原样透传
   --video-url        可重复，已是公网 URL 的参考视频，原样透传
   --audio-url        可重复，已是公网 URL 的参考音频，原样透传
@@ -319,6 +319,13 @@ async function requestJson(url, options = {}) {
 // 用「图片1/视频1/音频1」按位置引用。
 // 每项必须带 role：上游 doubao-seedance-2.0 校验 "role must be specified for image contents"，
 // 图/视频/音频分别用 reference_image / reference_video / reference_audio（与官方 Ark curl 一致）。
+//
+// 上游对不同媒体类型的 URL 形式要求不同：
+// - reference_image：接受 base64 data URL，也接受公网 URL（本地文件可走 --input 编码）。
+// - reference_video / reference_audio：必须是公网 web URL，传 base64 data URL 会被上游拒
+//   （reference_video must be provided as a web url）。
+// 因此本地视频/音频文件无法直接透传——rejectUnsupportedLocalMedia 会前置拦截并提示用户
+// 先上传到公网存储再用 --video-url / --audio-url 传入，避免静默编码成注定失败的 base64。
 function buildContentItems(cliArgs) {
   const items = [];
 
@@ -328,20 +335,33 @@ function buildContentItems(cliArgs) {
   for (const url of cliArgs.imageUrl) {
     items.push({ type: "image_url", image_url: { url }, role: "reference_image" });
   }
-  for (const filePath of cliArgs.videoInput) {
-    items.push({ type: "video_url", video_url: { url: buildDataUrl(filePath) }, role: "reference_video" });
-  }
   for (const url of cliArgs.videoUrl) {
     items.push({ type: "video_url", video_url: { url }, role: "reference_video" });
-  }
-  for (const filePath of cliArgs.audioInput) {
-    items.push({ type: "audio_url", audio_url: { url: buildDataUrl(filePath) }, role: "reference_audio" });
   }
   for (const url of cliArgs.audioUrl) {
     items.push({ type: "audio_url", audio_url: { url }, role: "reference_audio" });
   }
 
   return items;
+}
+
+// 前置拦截：本地视频/音频文件无法直接透传，上游要求公网 web URL。
+// cliArgs.videoInput / cliArgs.audioInput 仍被 parseArgs 收集（以便给出友好报错），
+// 但不再编码成 base64；命中即抛错，提示用户改用 --video-url / --audio-url。
+function rejectUnsupportedLocalMedia(cliArgs) {
+  if (cliArgs.videoInput.length > 0) {
+    throw new Error(
+      "参考视频不支持本地文件：上游 doubao-seedance 要求 reference_video 为公网 web URL，" +
+        "传 base64 data URL 会被拒（reference_video must be provided as a web url）。" +
+        "请先将视频上传到可公网访问的存储，再用 --video-url <公网URL> 传入。",
+    );
+  }
+  if (cliArgs.audioInput.length > 0) {
+    throw new Error(
+      "参考音频不支持本地文件：上游 doubao-seedance 要求 reference_audio 为公网 web URL，" +
+        "传 base64 data URL 会被拒。请先将音频上传到可公网访问的存储，再用 --audio-url <公网URL> 传入。",
+    );
+  }
 }
 
 function buildRequestBody(config, cliArgs, duration) {
@@ -507,6 +527,9 @@ async function run() {
   if (!cliArgs.prompt) {
     throw new Error("缺少 --prompt");
   }
+
+  // 本地视频/音频文件无法直接透传（上游要求公网 web URL），尽早拦截给出正确用法。
+  rejectUnsupportedLocalMedia(cliArgs);
 
   const config = resolveConfig(cliArgs);
 
