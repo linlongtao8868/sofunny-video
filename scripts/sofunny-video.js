@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// sofunny-video：直接调用 llm-api-proxy 的 doubao-seedance 视频生成接口。
+// sofunny-video：直接调用 Sofunny AIKey 的 doubao-seedance 视频生成接口。
 // 提交任务 -> 轮询状态 -> 下载视频到本地。
 // 参考图/视频以 base64 data URL 形式随请求体传递（上游异步任务需可直接读取的媒体）。
 // 配置优先级：命令行参数 > 进程环境变量 > ~/.sofunny-video.env > 默认值。

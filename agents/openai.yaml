@@ -1,7 +1,7 @@
 interface:
   display_name: "Sofunny Video"
-  short_description: "通过 llm-api-proxy 调用 doubao-seedance 生成视频，支持文生/图生/视频生"
-  default_prompt: "使用 $sofunny-video 通过 llm-api-proxy 调用 doubao-seedance 生成视频，支持文生视频、图生视频、视频生视频。"
+  short_description: "通过 Sofunny AIKey 调用 doubao-seedance 生成视频，支持文生/图生/视频生"
+  default_prompt: "使用 $sofunny-video 通过 Sofunny AIKey 调用 doubao-seedance 生成视频，支持文生视频、图生视频、视频生视频。"
 
 policy:
   allow_implicit_invocation: true
