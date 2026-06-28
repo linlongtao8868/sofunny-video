@@ -13,7 +13,8 @@ const HOME = os.homedir();
 const SOFUNNY_ENV_PATH = path.join(HOME, ".sofunny-video.env");
 
 const DEFAULT_BASE_URL = "https://llm-api-proxy.hnfunny.com";
-const DEFAULT_MODEL = "doubao-seedance-2-0-260128";
+// 用户在 env / 命令行只需写友好别名，脚本内部自动解析为上游要求的完整模型 ID。
+const DEFAULT_MODEL = "doubao-seedance-2-0";
 const DEFAULT_DURATION = 5;
 const DEFAULT_RATIO = "16:9";
 const DEFAULT_RESOLUTION = "1080p";
@@ -184,6 +185,19 @@ function applyConfigOverlay(target, source) {
   if (source.SOFUNNY_MODEL) target.model = source.SOFUNNY_MODEL;
 }
 
+// 模型别名 → 实际请求模型 ID。用户在 ~/.sofunny-video.env 里只需写友好别名
+// （如 doubao-seedance-2-0），脚本内部自动改成带日期后缀的完整 ID 用于请求，
+// 避免用户记忆/维护上游频繁变动的日期后缀。不在映射表里的模型原样透传
+// （happyhorse-1.0 等照旧走子模型自动选择逻辑）。
+const MODEL_ALIASES = {
+  "doubao-seedance-2-0": "doubao-seedance-2-0-260128",
+};
+
+function resolveModelAlias(model) {
+  const key = String(model || "").trim();
+  return MODEL_ALIASES[key] || key;
+}
+
 function resolveConfig(cliArgs) {
   const envFileExists = fs.existsSync(SOFUNNY_ENV_PATH);
   const fileEnv = parseEnvFile(SOFUNNY_ENV_PATH);
@@ -200,6 +214,9 @@ function resolveConfig(cliArgs) {
   if (cliArgs.baseUrl) merged.baseUrl = cliArgs.baseUrl;
   if (cliArgs.apiKey) merged.apiKey = cliArgs.apiKey;
   if (cliArgs.model) merged.model = cliArgs.model;
+
+  // 把友好别名解析为上游实际模型 ID（env 与 --model 都生效）。
+  merged.model = resolveModelAlias(merged.model);
 
   return {
     baseUrl: normalizeBaseUrl(merged.baseUrl),
