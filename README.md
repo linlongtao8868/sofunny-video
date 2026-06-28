@@ -2,7 +2,7 @@
 
 通过 **Sofunny AIKey** 统一调用视频生成模型（doubao-seedance 系列、阿里 DashScope HappyHorse 系列），支持文生 / 图生 / 视频生 / 参考音视频生成视频，自动提交任务、轮询状态并下载本地 mp4。
 
-这是一个 [Claude Code Skill](https://docs.claude.com/en/docs/claude-code/skills)，由 `SKILL.md` 描述触发时机与工作流，由 `scripts/sofunny-video.js` 提供可执行入口。
+这是一个通用 Skill（同时适用于 Claude Code、Codex 等 Agent），由 `SKILL.md` 描述触发时机与工作流，由 `scripts/sofunny-video.js` 提供可执行入口。
 
 ## 能力一览
 
@@ -30,13 +30,13 @@ sofunny-video/
 
 ## 安装
 
-推荐将本仓库目录软链接到 Claude Code 的 plugin skills 目录：
+推荐使用 `npx skills add` 安装，可自主选择目标 Agent（Claude Code / Codex 等）的 skills 路径：
 
 ```bash
-ln -s /path/to/sofunny-video ${CLAUDE_PLUGIN_ROOT}/skills/sofunny-video
+npx skills add https://github.com/linlongtao8868/sofunny-video.git
 ```
 
-入口脚本：`${CLAUDE_PLUGIN_ROOT}/skills/sofunny-video/scripts/sofunny-video.js`
+入口脚本：`<安装目录>/scripts/sofunny-video.js`（下文示例以 `${SKILL_DIR}` 代指该安装目录）。
 
 依赖：Node.js（内置 `fetch`，需 Node 18+）。
 
@@ -67,33 +67,30 @@ EOF
 文生视频：
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/skills/sofunny-video/scripts/sofunny-video.js \
-  --prompt "5秒电影感教室纯爱短片，16:9。"
+node ${SKILL_DIR}/scripts/sofunny-video.js \
+  --prompt "5秒雨后东京街头霓虹倒影，16:9。"
 ```
 
 图生视频（参考图为本地文件，自动编码为 base64 data URL）：
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/skills/sofunny-video/scripts/sofunny-video.js \
+node ${SKILL_DIR}/scripts/sofunny-video.js \
   --prompt "保持主体不变，镜头缓缓推近。" \
   --input /absolute/path/to/ref-1.png
 ```
 
-参考生视频（图片 + 公网音频作背景音乐）：
+参考生视频（参考图 + 参考视频 + 参考音频，视频/音频须为公网 URL）：
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/skills/sofunny-video/scripts/sofunny-video.js \
-  --prompt "图中的人抬头微笑，背景用音频1" \
-  --image-url https://example.com/ref.jpg \
-  --audio-url https://example.com/bgm.mp3
+node ${SKILL_DIR}/scripts/sofunny-video.js \
+  --prompt "按参考视频的运动节奏重绘场景，背景用音频1。" \
+  --input /absolute/path/to/ref-1.png \
+  --video-url https://example.com/motion-ref.mp4 \
+  --audio-url https://example.com/bgm.mp3 \
+  --generate-audio
 ```
 
-HappyHorse 文生视频：
-
-```bash
-SOFUNNY_MODEL=happyhorse-1.0 node ${CLAUDE_PLUGIN_ROOT}/skills/sofunny-video/scripts/sofunny-video.js \
-  --prompt "一只橘猫在窗台上晒太阳，微风吹过，猫咪打了个哈欠"
-```
+HappyHorse（DashScope）模型用法见 [references/api.md](references/api.md#happyhorse-dashscope-接口)。
 
 ## 参数速查
 
