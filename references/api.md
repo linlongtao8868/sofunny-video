@@ -340,3 +340,113 @@ node ${CLAUDE_PLUGIN_ROOT}/skills/sofunny-video/scripts/sofunny-video.js \
 | `--timeout-seconds` | 否 | 轮询超时，默认 `600` |
 | `--poll-interval-ms` | 否 | 轮询间隔，默认 `3000` |
 | `--debug` | 否 | 输出调试日志到 stderr |
+
+## Happyhorse (DashScope) 接口
+
+通过 `--model happyhorse-1.0`（或 `SOFUNNY_MODEL=happyhorse-1.0`）切换到阿里 DashScope 的 HappyHorse 系列视频模型。与 doubao-seedance 使用相同的代理端点（`POST /v1/video/generations`），但请求体格式完全不同——脚本内部自动适配，无需手动选择子模型。
+
+### 子模型自动选择规则
+
+| 输入媒体 | 选中的子模型 | 说明 |
+|---|---|---|
+| 仅有文本 prompt | `happyhorse-{ver}-t2v` | 文生视频 |
+| 仅图片（`--input` / `--image-url`）| `happyhorse-{ver}-i2v` | 首帧生视频 |
+| 有视频/音频（`--video-url` / `--audio-url`）| `happyhorse-{ver}-r2v` | 参考生视频 |
+
+版本号从 `--model` 参数提取：`happyhorse-1.0` → `happyhorse-1.0-t2v/i2v/r2v`；`happyhorse-1.1` → `happyhorse-1.1-t2v/i2v/r2v`。
+
+### 请求体格式
+
+#### t2v — 文生视频
+
+```json
+{
+  "model": "happyhorse-1.0-t2v",
+  "prompt": "一只橘猫在窗台上晒太阳",
+  "size": "720P",
+  "duration": 5,
+  "ratio": "16:9"
+}
+```
+
+#### i2v — 图生视频
+
+单图（`input_reference` 顶层字段；本地文件自动编码为 base64 data URL）：
+```json
+{
+  "model": "happyhorse-1.0-i2v",
+  "prompt": "让图片中的人转头微笑",
+  "input_reference": "https://example.com/ref.png",
+  "size": "720P",
+  "duration": 5,
+  "ratio": "16:9"
+}
+```
+
+多图（走 `media[]` 数组）：
+```json
+{
+  "model": "happyhorse-1.0-i2v",
+  "prompt": "...",
+  "size": "720P",
+  "duration": 5,
+  "ratio": "16:9",
+  "media": [
+    {"type": "reference_image", "url": "https://example.com/img1.png"},
+    {"type": "reference_image", "url": "https://example.com/img2.png"}
+  ]
+}
+```
+
+#### r2v — 参考生视频
+
+图片 + 音频（`reference_voice` 挂在最后一个 media 项上）：
+```json
+{
+  "model": "happyhorse-1.0-r2v",
+  "prompt": "图中的人抬头微笑，背景用音频1",
+  "size": "720P",
+  "duration": 5,
+  "ratio": "16:9",
+  "media": [
+    {"type": "reference_image", "url": "https://example.com/ref.jpg", "reference_voice": "https://example.com/bgm.mp3"}
+  ]
+}
+```
+
+### 协议差异速查
+
+| 维度 | doubao-seedance | happyhorse |
+|------|----------------|------------|
+| 子模型选择 | 单模型 | 自动选 t2v/i2v/r2v |
+| 分辨率字段 | `metadata.resolution` ("1080p") | 顶层 `size` ("1080P") |
+| 画幅比 | `metadata.ratio` | 顶层 `ratio` |
+| 时长 | `seconds`(str) + `duration`(int) | 仅 `duration`(int) |
+| 参考媒体 | `metadata.content[]` (image_url/video_url/audio_url + role) | `media[]` / `input_reference` |
+| 视频参考 | `reference_video` (type=video_url) | 1.0 不支持（映射为 reference_image + warning）；1.1 待验证 |
+| 音频 | 独立 `audio_url` 项 | `reference_voice` 挂在 media 项上 |
+| generate_audio | 支持 | 不支持（warning 后忽略） |
+| watermark | 支持 | 不支持（warning 后忽略） |
+| seed | 支持 | 不支持 |
+
+### 分辨率映射
+
+| `--resolution` 输入 | happyhorse `size` | 备注 |
+|---|---|---|
+| `720p` / `720P` | `720P` | |
+| `1080p` / `1080P` | `1080P` | 默认 |
+| `480p` | `720P` | 不支持 480P，fallback + warning |
+| `4k` | `1080P` | 不支持 4K，fallback + warning |
+
+### 媒体类型约束
+
+- **图片**：本地文件 → base64 data URL；公网 URL → 原样透传。支持 `--input` 和 `--image-url`。
+- **视频**（happyhorse-1.0-r2v）：上游**不支持** `reference_video` 类型。`--video-url` 传入的视频 URL 会被映射为 `reference_image` 类型（脚本自动 warning），仍可触发 r2v 子模型。happyhorse-1.1 预计支持原生 `reference_video`。
+- **音频**：通过 `reference_voice` 字段挂载到最后一个 media 项上，不支持独立的 `audio_url` 项。多个 `--audio-url` 只取第一个（warning 提示）。
+
+### 端点与轮询
+
+happyhorse 复用与 doubao 相同的三个端点，轮询/下载逻辑不变：
+- 提交：`POST /v1/video/generations`
+- 轮询：`GET /v1/video/generations/:task_id`
+- 下载：`GET /v1/videos/:task_id/content`

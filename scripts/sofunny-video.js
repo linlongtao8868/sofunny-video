@@ -365,6 +365,10 @@ function rejectUnsupportedLocalMedia(cliArgs) {
 }
 
 function buildRequestBody(config, cliArgs, duration) {
+  if (isHappyhorseModel(config.model)) {
+    return buildHappyhorseRequestBody(config, cliArgs, duration);
+  }
+
   const body = {
     model: config.model,
     prompt: cliArgs.prompt,
@@ -403,6 +407,158 @@ function buildRequestBody(config, cliArgs, duration) {
   return body;
 }
 
+// ============================================================
+// Happyhorse (DashScope) 协议适配
+// ============================================================
+
+function isHappyhorseModel(model) {
+  return String(model || "").toLowerCase().startsWith("happyhorse");
+}
+
+// 从 happyhorse-1.0 中提取版本号 "1.0"；无法提取时默认 "1.0"。
+function happyhorseVersion(model) {
+  const m = String(model || "").match(/happyhorse-(\d+\.\d+)/i);
+  return m ? m[1] : "1.0";
+}
+
+// 分辨率映射：doubao 小写 "1080p" → dashscope 大写 "1080P"。
+// happyhorse 仅支持 720P / 1080P 两档，480p→720P，4k→1080P。
+function buildHHResolution(resolution) {
+  const r = String(resolution || "").trim().toUpperCase();
+  if (r === "720P" || r === "1080P") return r;
+  if (r === "480P") {
+    console.error("[sofunny-video] WARNING: happyhorse does not support 480P, falling back to 720P");
+    return "720P";
+  }
+  if (r === "4K") {
+    console.error("[sofunny-video] WARNING: happyhorse does not support 4K, falling back to 1080P");
+    return "1080P";
+  }
+  // 默认 720P
+  return "720P";
+}
+
+// 根据输入媒体类型自动选择子模型 t2v / i2v / r2v。
+function selectHappyhorseSubModel(model, cliArgs) {
+  const ver = happyhorseVersion(model);
+  const hasImages = (cliArgs.input || []).length + (cliArgs.imageUrl || []).length > 0;
+  const hasVideo = (cliArgs.videoUrl || []).length > 0;
+  const hasAudio = (cliArgs.audioUrl || []).length > 0;
+
+  // 视频/音频参考 → r2v
+  if (hasVideo || hasAudio) {
+    if (hasVideo && ver === "1.0") {
+      console.error(
+        "[sofunny-video] WARNING: happyhorse-1.0-r2v does not support reference_video media type. " +
+          "Video URLs will be sent as reference_image instead. " +
+          "Consider upgrading to happyhorse-1.1 for native reference_video support.",
+      );
+    }
+    return `happyhorse-${ver}-r2v`;
+  }
+
+  // 仅图片参考 → i2v
+  if (hasImages) return `happyhorse-${ver}-i2v`;
+
+  // 纯文本 → t2v
+  return `happyhorse-${ver}-t2v`;
+}
+
+// ---- t2v：纯文生视频 ----
+function buildHappyhorseT2VBody(model, cliArgs, duration) {
+  return {
+    model,
+    prompt: cliArgs.prompt,
+    size: buildHHResolution(cliArgs.resolution),
+    duration,
+    ratio: cliArgs.ratio || "16:9",
+  };
+}
+
+// ---- i2v：图生视频（首帧）----
+function buildHappyhorseI2VBody(model, cliArgs, duration) {
+  const images = [];
+  for (const filePath of cliArgs.input || []) {
+    images.push(buildDataUrl(filePath));
+  }
+  for (const url of cliArgs.imageUrl || []) {
+    images.push(url);
+  }
+
+  const body = {
+    model,
+    prompt: cliArgs.prompt,
+    size: buildHHResolution(cliArgs.resolution),
+    duration,
+    ratio: cliArgs.ratio || "16:9",
+  };
+
+  if (images.length === 1) {
+    // 单图：走 input_reference 顶层字段
+    body.input_reference = images[0];
+  } else if (images.length > 1) {
+    // 多图：走 media[] 数组
+    body.media = images.map((url) => ({ type: "reference_image", url }));
+  }
+
+  return body;
+}
+
+// ---- r2v：参考生视频（图片/视频/音频）----
+function buildHappyhorseR2VBody(model, cliArgs, duration) {
+  const mediaItems = [];
+
+  // 图片
+  for (const filePath of cliArgs.input || []) {
+    mediaItems.push({ type: "reference_image", url: buildDataUrl(filePath) });
+  }
+  for (const url of cliArgs.imageUrl || []) {
+    mediaItems.push({ type: "reference_image", url });
+  }
+
+  // 视频（happyhorse-1.0 不支持 reference_video，映射为 reference_image）
+  for (const url of cliArgs.videoUrl || []) {
+    mediaItems.push({ type: "reference_image", url });
+  }
+
+  // 音频：reference_voice 挂到最后一个 media 项上
+  const audioUrls = (cliArgs.audioUrl || []).slice();
+  if (mediaItems.length > 0 && audioUrls.length > 0) {
+    // 把第一个音频挂到最后一个 media 项（dashscope 支持一个 reference_voice）
+    mediaItems[mediaItems.length - 1].reference_voice = audioUrls[0];
+    if (audioUrls.length > 1) {
+      console.error(
+        "[sofunny-video] WARNING: multiple --audio-url values provided but happyhorse supports " +
+          "only one reference_voice (attached to the last media item). Extra audio URLs are ignored.",
+      );
+    }
+  } else if (mediaItems.length === 0 && audioUrls.length > 0) {
+    // 仅音频无图片：创建一条 ref_image 携带 reference_voice（dashscope 边角情况）
+    mediaItems.push({
+      type: "reference_image",
+      url: audioUrls[0],
+      reference_voice: audioUrls[0],
+    });
+  }
+
+  return {
+    model,
+    prompt: cliArgs.prompt,
+    size: buildHHResolution(cliArgs.resolution),
+    duration,
+    ratio: cliArgs.ratio || "16:9",
+    media: mediaItems.length > 0 ? mediaItems : undefined,
+  };
+}
+
+// ---- 顶层分发 ----
+function buildHappyhorseRequestBody(config, cliArgs, duration) {
+  const method = config.model;
+  if (method.endsWith("-t2v")) return buildHappyhorseT2VBody(method, cliArgs, duration);
+  if (method.endsWith("-i2v")) return buildHappyhorseI2VBody(method, cliArgs, duration);
+  return buildHappyhorseR2VBody(method, cliArgs, duration);
+}
+
 function extractTaskId(payload) {
   return payload?.task_id || payload?.taskId || payload?.id || null;
 }
@@ -438,7 +594,7 @@ async function submitTask(config, cliArgs, duration) {
   const body = buildRequestBody(config, cliArgs, duration);
   const startedAt = Date.now();
 
-  debugLog("request:start", { endpoint, model: config.model, duration, has_content: Boolean(body.metadata.content) });
+  debugLog("request:start", { endpoint, model: config.model, duration, has_content: Boolean(body.metadata?.content) });
 
   const response = await requestJson(endpoint, {
     method: "POST",
@@ -529,9 +685,26 @@ async function run() {
   }
 
   // 本地视频/音频文件无法直接透传（上游要求公网 web URL），尽早拦截给出正确用法。
-  rejectUnsupportedLocalMedia(cliArgs);
+  // happyhorse 模式下由 selectHappyhorseSubModel 内部处理，不需 doubao 的拦截逻辑。
+  const isHHPrelim = isHappyhorseModel(cliArgs.model || process.env.SOFUNNY_MODEL || "");
+
+  if (!isHHPrelim) {
+    rejectUnsupportedLocalMedia(cliArgs);
+  }
 
   const config = resolveConfig(cliArgs);
+
+  // happyhorse 子模型自动选择：根据媒体类型将 config.model 替换为 t2v/i2v/r2v。
+  if (isHappyhorseModel(config.model)) {
+    // 不支持这些 doubao 专属字段
+    if (cliArgs.generateAudio !== undefined) {
+      console.error("[sofunny-video] WARNING: --generate-audio is not supported by happyhorse, ignored.");
+    }
+    if (cliArgs.watermark) {
+      console.error("[sofunny-video] WARNING: --watermark is not supported by happyhorse, ignored.");
+    }
+    config.model = selectHappyhorseSubModel(config.model, cliArgs);
+  }
 
   if (!config.apiKey) {
     if (!config.envFileExists && !process.env.SOFUNNY_API_KEY && !cliArgs.apiKey) {
