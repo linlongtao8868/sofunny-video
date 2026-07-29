@@ -52,6 +52,7 @@ function printHelp() {
   --resolution       分辨率，默认 1080p
   --seed             可选，随机种子
   --output           可选，输出视频文件路径；未指定时写到当前工作目录
+  --task-id-file     可选，提交成功后立即把 task_id 写入该文件，便于终端中断后恢复
   --model            覆盖模型，默认 ${DEFAULT_MODEL}
   --base-url         覆盖服务根地址，默认 ${DEFAULT_BASE_URL}
   --api-key          覆盖服务令牌
@@ -99,6 +100,9 @@ function parseArgs(argv) {
         break;
       case "--output":
         result.output = argv[++i];
+        break;
+      case "--task-id-file":
+        result.taskIdFile = argv[++i];
         break;
       case "--duration":
         result.duration = argv[++i];
@@ -191,11 +195,31 @@ function applyConfigOverlay(target, source) {
 // （happyhorse-1.0 等照旧走子模型自动选择逻辑）。
 const MODEL_ALIASES = {
   "doubao-seedance-2-0": "doubao-seedance-2-0-260128",
+  "doubao-seed-2-0-fast": "doubao-seed-2-0-fast",
+  "doubao-seed-2-0-mini": "doubao-seed-2-0-mini",
 };
 
 function resolveModelAlias(model) {
   const key = String(model || "").trim();
   return MODEL_ALIASES[key] || key;
+}
+
+function isDoubaoSeed2CompactModel(model) {
+  return /^doubao-seed-2-0-(?:fast|mini)$/i.test(String(model || "").trim());
+}
+
+function resolveResolution(model, requestedResolution) {
+  const resolution = String(
+    requestedResolution || (isDoubaoSeed2CompactModel(model) ? "720p" : DEFAULT_RESOLUTION),
+  ).toLowerCase();
+
+  if (isDoubaoSeed2CompactModel(model) && !new Set(["480p", "720p"]).has(resolution)) {
+    throw new Error(
+      `${model} 仅支持 480p 或 720p，当前收到 ${requestedResolution}。请通过 --resolution 480p 或 --resolution 720p 指定。`,
+    );
+  }
+
+  return resolution;
 }
 
 function resolveConfig(cliArgs) {
@@ -456,7 +480,11 @@ function buildHHResolution(resolution) {
 }
 
 // 根据输入媒体类型自动选择子模型 t2v / i2v / r2v。
+// video-edit 是独立的视频编辑子模型，不做 t2v/i2v/r2v 替换。
 function selectHappyhorseSubModel(model, cliArgs) {
+  if (String(model || "").toLowerCase().includes("video-edit")) {
+    return String(model);
+  }
   const ver = happyhorseVersion(model);
   const hasImages = (cliArgs.input || []).length + (cliArgs.imageUrl || []).length > 0;
   const hasVideo = (cliArgs.videoUrl || []).length > 0;
@@ -568,11 +596,56 @@ function buildHappyhorseR2VBody(model, cliArgs, duration) {
   };
 }
 
+// ---- video-edit：待编辑视频 + 可选参考图 + 编辑指令 ----
+function buildHappyhorseVideoEditBody(model, cliArgs) {
+  const videoUrls = cliArgs.videoUrl || [];
+  if (videoUrls.length === 0) {
+    throw new Error(
+      "happyhorse video-edit 需要待编辑视频：请通过 --video-url 传入公网视频 URL（MP4/MOV，3~60 秒，≤100MB）。本地视频需先上传到公网存储。",
+    );
+  }
+
+  const mediaItems = [{ type: "video", url: videoUrls[0] }];
+  if (videoUrls.length > 1) {
+    console.error(
+      `[sofunny-video] WARNING: video-edit 仅支持 1 个待编辑视频，已忽略多余的 ${videoUrls.length - 1} 个 --video-url。`,
+    );
+  }
+
+  const refImages = [];
+  for (const filePath of cliArgs.input || []) {
+    refImages.push(buildDataUrl(filePath));
+  }
+  for (const url of cliArgs.imageUrl || []) {
+    refImages.push(url);
+  }
+  for (const url of refImages.slice(0, 5)) {
+    mediaItems.push({ type: "reference_image", url });
+  }
+  if (refImages.length > 5) {
+    console.error(
+      `[sofunny-video] WARNING: video-edit 参考图上限 5 张，已忽略多余的 ${refImages.length - 5} 张。`,
+    );
+  }
+
+  if ((cliArgs.audioUrl || []).length > 0) {
+    console.error("[sofunny-video] WARNING: video-edit 不支持参考音频（--audio-url），已忽略。");
+  }
+
+  return {
+    model,
+    prompt: cliArgs.prompt,
+    size: buildHHResolution(cliArgs.resolution),
+    media: mediaItems,
+  };
+}
+
 // ---- 顶层分发 ----
 function buildHappyhorseRequestBody(config, cliArgs, duration) {
   const method = config.model;
   if (method.endsWith("-t2v")) return buildHappyhorseT2VBody(method, cliArgs, duration);
   if (method.endsWith("-i2v")) return buildHappyhorseI2VBody(method, cliArgs, duration);
+  if (method.includes("video-edit")) return buildHappyhorseVideoEditBody(method, cliArgs);
   return buildHappyhorseR2VBody(method, cliArgs, duration);
 }
 
@@ -590,6 +663,8 @@ function extractVideoUrl(payload) {
     payload?.url ||
     payload?.data?.url ||
     payload?.data?.metadata?.url ||
+    payload?.data?.data?.output?.video_url ||
+    payload?.data?.output?.video_url ||
     null
   );
 }
@@ -656,6 +731,15 @@ function defaultOutputPath() {
 
 function buildOutputPath(requestedOutput) {
   return requestedOutput ? path.resolve(requestedOutput) : defaultOutputPath();
+}
+
+function persistTaskId(requestedPath, taskId) {
+  if (!requestedPath) return;
+  const finalPath = path.resolve(requestedPath);
+  const tempPath = `${finalPath}.${process.pid}.tmp`;
+  fs.mkdirSync(path.dirname(finalPath), { recursive: true });
+  fs.writeFileSync(tempPath, `${taskId}\n`, "utf8");
+  fs.renameSync(tempPath, finalPath);
 }
 
 async function downloadVideo(config, taskId, outputPath) {
@@ -732,7 +816,7 @@ async function run() {
 
   const duration = Number(cliArgs.duration || DEFAULT_DURATION);
   const ratio = cliArgs.ratio || DEFAULT_RATIO;
-  const resolution = cliArgs.resolution || DEFAULT_RESOLUTION;
+  const resolution = resolveResolution(config.model, cliArgs.resolution);
   const pollIntervalMs = Number(cliArgs.pollIntervalMs || DEFAULT_POLL_INTERVAL_MS);
   const timeoutSeconds = Number(cliArgs.timeoutSeconds || DEFAULT_TIMEOUT_SECONDS);
 
@@ -743,6 +827,7 @@ async function run() {
   // 1. 提交任务
   const submitted = await submitTask(config, cliArgs, duration);
   const taskId = submitted.taskId;
+  persistTaskId(cliArgs.taskIdFile, taskId);
   debugLog("task:submitted", { task_id: taskId });
 
   // 2. 轮询
@@ -805,7 +890,10 @@ async function run() {
   throw timeoutError;
 }
 
-run().catch((error) => {
+run().then(() => {
+  // 避免 fetch keep-alive 连接在下载完成后阻止进程退出。
+  process.exit(0);
+}).catch((error) => {
   debugLog("request:error", {
     message: error.message || String(error),
     code: error.code,

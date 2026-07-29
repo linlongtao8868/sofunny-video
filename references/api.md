@@ -167,7 +167,7 @@ Authorization: Bearer <SOFUNNY_API_KEY>
 
 ### `model`
 
-默认 `doubao-seedance-2-0`（友好别名，脚本自动解析为上游实际 ID `doubao-seedance-2-0-260128`）。可通过 `--model` / `SOFUNNY_MODEL` 覆盖；`happyhorse-1.0` 等不在别名表的模型原样透传。下述请求体示例中写的是解析后的上游 ID。
+默认 `doubao-seedance-2-0`（友好别名，脚本自动解析为上游实际 ID `doubao-seedance-2-0-260128`）。平台模型 `doubao-seed-2-0-fast` 与 `doubao-seed-2-0-mini` 按给定 ID 直通，由代理分别映射到 `doubao-seedance-2-0-fast-260128` 与 `doubao-seedance-2-0-mini-260615`。二者复用 Doubao 视频请求体，仅支持 `480p` / `720p`，未显式指定时默认 `720p`。
 
 ### `prompt`
 
@@ -325,9 +325,10 @@ node ${SKILL_DIR}/scripts/sofunny-video.js \
 | `--watermark` | 否 | 透传 `metadata.watermark=true`；默认不传，由上游决定 |
 | `--duration` | 否 | 视频时长（秒），默认 `5` |
 | `--ratio` | 否 | 画幅比例，默认 `16:9` |
-| `--resolution` | 否 | 分辨率，默认 `1080p`；上游价表维度之一（480p/720p/1080p/4k） |
+| `--resolution` | 否 | fast/mini 默认 `720p` 且仅支持 `480p` / `720p`；其他模型默认 `1080p` |
 | `--seed` | 否 | 随机种子 |
 | `--output` | 否 | 输出视频文件路径；未指定时保存到当前工作目录，文件名带时间戳 |
+| `--task-id-file` | 否 | 提交成功后立即原子写入 task ID；终端中断时可据此调用任务查询接口，避免重复提交 |
 | `--model` | 否 | 默认 `doubao-seedance-2-0`（别名，自动解析为上游 `doubao-seedance-2-0-260128`） |
 | `--base-url` | 否 | 覆盖服务根地址 |
 | `--api-key` | 否 | 覆盖服务令牌 |
@@ -348,6 +349,8 @@ node ${SKILL_DIR}/scripts/sofunny-video.js \
 | 有视频/音频（`--video-url` / `--audio-url`）| `happyhorse-{ver}-r2v` | 参考生视频 |
 
 版本号从 `--model` 参数提取：`happyhorse-1.0` → `happyhorse-1.0-t2v/i2v/r2v`；`happyhorse-1.1` → `happyhorse-1.1-t2v/i2v/r2v`。
+
+> **video-edit 不参与自动选择**：视频编辑（`happyhorse-{ver}-video-edit`）需显式指定，例如 `--model happyhorse-1.0-video-edit`。传入一个 `--video-url` 作为待编辑视频，可选最多 5 张 `--input` / `--image-url` 参考图。
 
 ### 请求体格式
 
@@ -407,6 +410,25 @@ node ${SKILL_DIR}/scripts/sofunny-video.js \
   ]
 }
 ```
+
+#### video-edit — 视频编辑
+
+```json
+{
+  "model": "happyhorse-1.0-video-edit",
+  "prompt": "让视频中的角色穿上参考图中的条纹毛衣",
+  "size": "720P",
+  "media": [
+    {"type": "video", "url": "https://example.com/source.mp4"},
+    {"type": "reference_image", "url": "https://example.com/clothes.webp"}
+  ]
+}
+```
+
+- 必须包含一个公网 `--video-url`；仅使用第一个视频 URL。
+- 可选 0~5 张参考图，多余图片会忽略并告警。
+- 不发送 `duration` / `ratio`，输出时长与画幅由输入视频决定。
+- 不支持 `--audio-url`，传入时会忽略并告警。
 
 ### 协议差异速查
 

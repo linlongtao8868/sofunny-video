@@ -1,7 +1,7 @@
 ---
 name: sofunny-video
-version: 1.0.2
-description: 通过 Sofunny AIKey 调用 doubao-seedance / HappyHorse 生成视频，支持文生/图生/视频生、参考音视频、generate_audio，提交、轮询、下载本地 mp4
+version: 1.1.1
+description: 通过 Sofunny AIKey 调用 doubao-seedance、doubao-seed 和 HappyHorse 生成或编辑视频，支持文生/图生/视频生、参考音视频、generate_audio，提交、轮询、下载本地 mp4
 ---
 
 # sofunny-video
@@ -13,7 +13,7 @@ description: 通过 Sofunny AIKey 调用 doubao-seedance / HappyHorse 生成视�
 - 用户要生成视频（文生视频、图生视频、视频生视频）
 - 用户要上传参考图、参考视频或参考音频，再结合文本生成新视频
 - 用户要让上游为视频生成音频（`--generate-audio`）或把参考音频作为背景音乐
-- 用户希望通过 `Sofunny AIKey` 统一调用 `doubao-seedance` 或 `HappyHorse` 系列视频模型
+- 用户希望通过 `Sofunny AIKey` 统一调用 `doubao-seedance`、`doubao-seed` 或 `HappyHorse` 系列视频模型
 - 用户希望优先复用进程环境变量与 `~/.sofunny-video.env`
 
 如果只是普通文本问答、代码生成或图片生成，不要使用本 skill（图片生成用 `sofunny-image`）。
@@ -29,7 +29,7 @@ description: 通过 Sofunny AIKey 调用 doubao-seedance / HappyHorse 生成视�
 
 如果没有检测到 `~/.sofunny-video.env`，脚本会提示创建该文件并写入变量模板。文件中只应使用 `SOFUNNY_*` 变量，避免旧配置混入。
 
-**模型别名**：env / 命令行只需写友好别名 `doubao-seedance-2-0`，脚本内部自动解析为上游实际模型 ID `doubao-seedance-2-0-260128`，用户无需维护日期后缀。`happyhorse-1.0` 等不在别名表里的模型原样透传。
+**模型选择**：`doubao-seedance-2-0` 会解析为上游实际模型 ID `doubao-seedance-2-0-260128`。平台模型 `doubao-seed-2-0-fast`、`doubao-seed-2-0-mini` 按给定 ID 直通，由代理映射到上游模型；二者仅支持 `480p` / `720p`，未指定分辨率时默认 `720p`。`happyhorse-1.0` 等其他模型原样透传。
 
 ## 安装与执行入口
 
@@ -75,6 +75,8 @@ node ${SKILL_DIR}/scripts/sofunny-video.js \
 - 仅图片（`--input` / `--image-url`）→ `happyhorse-{ver}-i2v`（首帧生视频）
 - 含视频/音频（`--video-url` / `--audio-url`）→ `happyhorse-{ver}-r2v`（参考生视频）
 
+**视频编辑**需显式指定 `--model happyhorse-{ver}-video-edit`（不参与自动选择）：`--video-url` 作为待编辑视频，可选 `--input` / `--image-url` 作为参考图，`--prompt` 描述编辑意图。video-edit 不传 `duration` / `ratio`，不支持参考音频；缺少 `--video-url` 时直接报错。
+
 happyhorse 与 doubao-seedance 在请求体格式、分辨率字段、参考媒体结构上有显著差异；`generate_audio` / `watermark` / 原生视频参考在 happyhorse-1.0 上不支持（脚本会 warning 并忽略或降级映射）。完整差异表与请求体示例见 [references/api.md](references/api.md#happyhorse-dashscope-接口)。happyhorse-1.1 开通后改 `SOFUNNY_MODEL=happyhorse-1.1` 即可，子模型选择逻辑不变。
 
 ## 参数决策
@@ -82,8 +84,9 @@ happyhorse 与 doubao-seedance 在请求体格式、分辨率字段、参考媒�
 - 必填：`--prompt`
 - 参考媒体：本地**图片**用 `--input`（base64 透传）；参考**视频/音频必须用公网 web URL**，上游不接受 base64（传了会返回 `reference_video must be provided as a web url`）。本地视频/音频需先上传到公网存储，再用 `--video-url` / `--audio-url` 传入；`--video-input` / `--audio-input` 已禁用本地文件，传了直接报错。
 - 音频：`--generate-audio` 让上游为视频生成音频；参考音频作背景音乐时同时传 `--audio-url`（公网 URL），prompt 用「音频1」按位置引用。
-- 画幅/时长/分辨率：`--ratio`、`--duration`、`--resolution`；计费随分辨率与是否含视频输入变化。
+- 画幅/时长/分辨率：`--ratio`、`--duration`、`--resolution`；fast/mini 仅支持 `480p` / `720p`，其他 Doubao 模型默认 `1080p`。计费随分辨率与是否含视频输入变化。
 - 输出：`--output` 指定路径，未指定则写入当前工作目录（文件名带时间戳）。
+- 恢复：真实任务建议传 `--task-id-file`，脚本提交成功后立即持久化 task ID；客户端中断时先按该 ID 查询，不要重提。
 - 完整参数表与默认值见 [references/api.md](references/api.md#参数速查)。
 
 ## 工作流

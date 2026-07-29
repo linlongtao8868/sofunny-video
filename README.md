@@ -1,6 +1,6 @@
 # sofunny-video
 
-通过 **Sofunny AIKey** 统一调用视频生成模型（doubao-seedance 系列、阿里 DashScope HappyHorse 系列），支持文生 / 图生 / 视频生 / 参考音视频生成视频，自动提交任务、轮询状态并下载本地 mp4。
+通过 **Sofunny AIKey** 统一调用视频生成模型（doubao-seedance、doubao-seed、阿里 DashScope HappyHorse 系列），支持文生 / 图生 / 视频生 / 参考音视频生成及视频编辑，自动提交任务、轮询状态并下载本地 mp4。
 
 这是一个通用 Skill（同时适用于 Claude Code、Codex 等 Agent），由 `SKILL.md` 描述触发时机与工作流，由 `scripts/sofunny-video.js` 提供可执行入口。
 
@@ -11,6 +11,7 @@
 | 文生视频 (t2v) | ✅ 单模型 | ✅ 自动选 `*-t2v` |
 | 图生视频 (i2v) | ✅ `--input` / `--image-url` | ✅ 自动选 `*-i2v` |
 | 参考/视频生视频 (r2v) | ✅ `--video-url` | ✅ 自动选 `*-r2v`（1.0 视频参考会映射为图片） |
+| 视频编辑 (video-edit) | — | ✅ 显式指定 `happyhorse-*-video-edit` |
 | 参考音频作背景音乐 | ✅ `--audio-url` | ✅ `reference_voice` |
 | 上游生成音频 `--generate-audio` | ✅ | ❌（忽略并 warning） |
 | 水印 `--watermark` | ✅ | ❌（忽略并 warning） |
@@ -24,6 +25,8 @@ sofunny-video/
 ├── README.md             # 本文件
 ├── scripts/
 │   └── sofunny-video.js  # 可执行入口：提交任务 → 轮询 → 下载 mp4
+├── tests/
+│   └── mock-integration.js # 本地 mock 集成测试，不调用生产接口
 └── references/
     └── api.md            # 上游接口、请求体示例、参数速查、更多示例
 ```
@@ -58,7 +61,7 @@ SOFUNNY_MODEL=doubao-seedance-2-0
 EOF
 ```
 
-> **模型别名**：env / 命令行只需写友好别名 `doubao-seedance-2-0`，脚本内部自动解析为上游实际模型 ID `doubao-seedance-2-0-260128` 用于请求，用户无需维护日期后缀。`happyhorse-1.0` 等不在别名表里的模型原样透传。要切换到 HappyHorse，把 `SOFUNNY_MODEL` 改成 `happyhorse-1.0` 即可。
+> **模型选择**：`doubao-seedance-2-0` 自动解析为 `doubao-seedance-2-0-260128`；平台模型 `doubao-seed-2-0-fast` 和 `doubao-seed-2-0-mini` 按给定 ID 直通，由代理映射到上游模型。fast/mini 仅支持 `480p` / `720p`，未指定时默认 `720p`。要切换到 HappyHorse，把 `SOFUNNY_MODEL` 改成 `happyhorse-1.0` 即可。
 
 文件中只应使用 `SOFUNNY_*` 变量，避免旧配置混入。
 
@@ -92,6 +95,13 @@ node ${SKILL_DIR}/scripts/sofunny-video.js \
 
 HappyHorse（DashScope）模型用法见 [references/api.md](references/api.md#happyhorse-dashscope-接口)。
 
+Doubao fast / mini：
+
+```bash
+node ${SKILL_DIR}/scripts/sofunny-video.js --model doubao-seed-2-0-fast --resolution 480p --prompt "快速生成一段雨夜街景"
+node ${SKILL_DIR}/scripts/sofunny-video.js --model doubao-seed-2-0-mini --resolution 480p --prompt "生成一段轻量预览视频"
+```
+
 ## 参数速查
 
 | 参数 | 说明 | 默认 |
@@ -109,6 +119,7 @@ HappyHorse（DashScope）模型用法见 [references/api.md](references/api.md#h
 | `--resolution` | 分辨率 | 1080p |
 | `--seed` | 随机种子 | — |
 | `--output` | 输出路径，未指定则写入当前工作目录（带时间戳） | — |
+| `--task-id-file` | 提交成功后立即保存 task ID，便于中断后恢复查询 | — |
 | `--model` | 覆盖模型 | `doubao-seedance-2-0` |
 | `--base-url` | 覆盖服务根地址 | `https://llm-api-proxy.hnfunny.com` |
 | `--api-key` | 覆盖服务令牌 | — |
@@ -118,6 +129,14 @@ HappyHorse（DashScope）模型用法见 [references/api.md](references/api.md#h
 | `--help` | 显示帮助 | — |
 
 完整参数说明与更多示例见 [references/api.md](references/api.md)。
+
+## 本地验证
+
+```bash
+node tests/mock-integration.js
+```
+
+该测试使用本地 HTTP mock，覆盖 `doubao-seed-2-0-fast`、`doubao-seed-2-0-mini` 和 `happyhorse-1.0-video-edit` 的提交、轮询与下载流程，不产生线上调用费用。
 
 ## 工作流
 
